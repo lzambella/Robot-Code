@@ -2,32 +2,39 @@
 #include "Wire.h"
 #define I2CDEV_IMPLEMENTATION I2CDEV_ARDUINO_WIRE 
 #include "MPU6050_6Axis_MotionApps20.h"
-#define OUTPUT_READABLE_YAWPITCHROLL
-#define INTERRUPT_PIN 3
+#include "LinkedList\LinkedList.h" // store every single turn
+#define OUTPUT_READABLE_YAWPITCHROLL // Output our angles to the serial monitor
+#define INTERRUPT_PIN 3 // IIC interupt pin
 #define LED_PIN 12
-#define THRESHOLD_ANGLE 45 // The angle our bot will gnerally rotate at
+#define THRESHOLD_ANGLE 45 // The angle our bot will gnerally rotate at (deprecated)
+#define TURN_LED 27 // LED that enables when the robot is in the turning state
 
 MPU6050 mpu;
 
+byte LEFT = 0;
+byte RIGHT = 1;
+byte FORWARD = 2;
+byte INVERT = 3;
+
 int silentTest=0;
-byte IN1 = 6;
+byte IN1 = 6; // L Motor 
 byte IN2 = 7;
-byte IN3 = 5;                        
+byte IN3 = 5; // R Motor?            
 byte IN4 = 4;
 byte backTicks=0;                          
-byte rWheelSpeedMax = 150; //prevent burnout
-byte lWheelSpeedMax = 100;
-byte rWheelSpeed = rWheelSpeedMax;
+byte rWheelSpeedMax = 50; //prevent burnout
+byte lWheelSpeedMax = 50; // stupid motors arent matched
+byte rWheelSpeed = rWheelSpeedMax; // This is redundant
 byte lWheelSpeed = lWheelSpeedMax;
 byte boundsThresh = 20;
 byte frontPin = 2; //front pin
 byte frontLED = 22; // on: robot is turning
 
-const int lEnable = 12;
-const int rEnable = 13;
+const int lEnable = 12; //pwm for left motor
+const int rEnable = 13; //pwm for right motor
 
-const int button = 23;
-bool enabled = false;
+const int button = 23; // Button to enable the robot
+bool enabled = false; // whether the robot should be running full code
 
 int errorDistance=0;
 
@@ -37,9 +44,10 @@ int errorDistance=0;
 double angleInitial = -1; // snapshot of stored angle
 double angleCurrent = 0; //Current angle read from the gyroscope
 double angleFinal = 0; // Our angle we want the robot to turn at, gets set in the turn method
+double angleStarting = 0; // current angle after a successful turn
 
-int SWITCHSTATE = 0; // checks whether the switch has been pressed
-bool STATE = false;
+int SWITCHSTATE = 0; // checks whether the switch has been pressed (deprecated)
+bool STATE = false; // No idea
 bool rotating = false; // If the robot is currently rotating
 
 bool blinkState = false;
@@ -60,6 +68,15 @@ VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+
+int frontDist;
+int leftDist;
+int rightDist;
+
+LinkedList<byte> turns = LinkedList<byte>(); // Store all the turns the robot makes
+LinkedList<double> angles = LinkedList<double>(); // Store the current angle every program loop
+
+
 void dmpDataReady() {
     mpuInterrupt = true;
 }
@@ -72,18 +89,6 @@ void gyroscopeSetup(){
     #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
         Fastwire::setup(400, true);
     #endif
-
-    // initialize serial communication
-    // (115200 chosen because it is required for Teapot Demo output, but it's
-    // really up to you depending on your project)
-    Serial.begin(115200);
-    while (!Serial); // wait for Leonardo enumeration, others continue immediately
-
-    // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3V or Arduino
-    // Pro Mini running at 3.3V, cannot handle this baud rate reliably due to
-    // the baud timing being too misaligned with processor ticks. You must use
-    // 38400 or slower in these cases, or use some kind of external separate
-    // crystal solution for the UART timer.
 
     // initialize device
     Serial.println(F("Initializing I2C devices..."));
@@ -145,6 +150,7 @@ void setup()
     pinMode(9, INPUT); // Sets the echoPin as an Input
     pinMode(10, OUTPUT); // Sets the trigPin as an Output
     pinMode(11, INPUT); // Sets the echoPin as an Input
+	pinMode(TURN_LED, OUTPUT);
     pinMode(frontLED, OUTPUT);
     pinMode(button, INPUT);
     
@@ -160,19 +166,6 @@ void setup()
   */
 void loop()
 {
-  while (!enabled) {
-    if (digitalRead(button) == HIGH) {
-      enabled = true;
-      digitalWrite(24, LOW); // Disable the red led
-    }
-  }
-  int value;
-  //delay(30);
-  backTicks+=1;
-  int frontDist = getDistance(frontPin);
-  int leftDistance = getLeftDistance();
-  int rightDistance = getRightDistance();
-  errorDistance = leftDistance-rightDistance;
   /*
   Serial.print(String(leftDistance) + " " + frontDist + " " + String(rightDistance));
   Serial.println();
@@ -181,23 +174,31 @@ void loop()
   Serial.print("Back ticks: " + String(backTicks));
   Serial.println();
   */
-
+	frontDist = getDistance(frontPin);
+	leftDist = getLeftDistance();
+	rightDist = getRightDistance();
+	errorDistance = leftDist - rightDist;
         // if programming failed, don't try to do anything
     if (!dmpReady) return;
 
     
     do {
-      // other program behavior stuff here
-      // Any code not related to the gyroscope should be placed here
-      
-      //if (rotating) Serial.println("Currently Rotating!");
+		// other program behavior stuff here
+		// Any code not related to the gyroscope should be placed here
+
+
       if (rotating && abs(angleCurrent - angleInitial) >= abs(angleFinal)) { 
           // if we reached our threshold angle
           moveForward();
           Serial.println("Sucessfully rotated!");
           rotating = false;
+		  digitalWrite(TURN_LED, LOW);
+		  angleStarting = angleCurrent;
       }
-      else if (!rotating) {  
+      else if (!rotating) {  // if we are supposed to be moving forward
+
+		/*
+		// Ineffecient code to prevent stopping in a wall use accelerometer instead
         if(backTicks >= 80)
         {
           backTicks=0;
@@ -209,57 +210,26 @@ void loop()
           //delay(10);
           stopMovement();
         }     
-        if(frontDist <= 9)
-        {
-          
-          digitalWrite(frontLED,HIGH);
-          if(rightDistance <= 7)
-          {
-            if(frontDist <= 4 && rightDistance <= 4)
-                moveBackward();
-            else
-                turn(-1, 45);        
-          }
-          else
-          {
-            turn(1, 45);
-          }
-          //delay(100);
-          //moveForward();
-          //delay(5);
-        }
-        else if(leftDistance < boundsThresh && rightDistance < boundsThresh) //if we're within wall range
-        {
-          /*if(errorDistance > 2) //if its far on the right side, turn left a bit
-          {
-            lWheelSpeed = lWheelSpeedMax*0.8;
-            rWheelSpeed = rWheelSpeedMax;
-            Serial.println("Lean left");
-          }
-          else if(errorDistance < -2)
-          {
-            rWheelSpeed = rWheelSpeedMax*0.8;
-            lWheelSpeed = lWheelSpeedMax;
-            Serial.println("Lean right");
-          }
-          else
-          {
-            lWheelSpeed = lWheelSpeedMax;
-            rWheelSpeed = rWheelSpeedMax;
-            Serial.println("Normal");
-          }*/
-          if(leftDistance <= 4)
-          {
-            turn(1, 45);
-            //delay(10);
-          }
-          else if(rightDistance <= 4)
-          {
-            turn(-1, 45);
-            //delay(10);
-          }
-          moveForward();
-        }
+		*/
+		  /*
+		   * Turning logic
+		   */
+		if (frontDist <= 10 && rightDist >= 10 && leftDist >= 10) { // Prioritize turning left at a fork
+			 turn(LEFT, 45);
+			 turns.add(LEFT);
+		}
+		else if (frontDist <= 10 && leftDist <= 10) { // left corner
+			turn(RIGHT, 45);
+			turns.add(RIGHT);
+		}
+		else if (frontDist <= 10 && rightDist <= 10) { //right corner
+			turn(LEFT, 45);
+			turns.add(LEFT);
+		}
+		else if (frontDist <= 10 && rightDist <= 10 && leftDist <= 10) { // dead end
+			turn(LEFT, 180);
+			turns.add(INVERT);
+		}
         else
         {
           lWheelSpeed = lWheelSpeedMax;
@@ -267,6 +237,20 @@ void loop()
           digitalWrite(frontLED,LOW);
           moveForward();
         }
+
+		/*
+		Check if the robot starts drifting from a straight path
+		note: what happens when the current angle is near the rollover (-179 and 179)?? just detect from the walls instead?
+		
+		if (average() <= angleCurrent - 15)
+			turn(RIGHT, average() - angleCurrent);
+		else if (average() >= angleCurrent + 15)
+			turn(LEFT, angleCurrent - average());
+		*/
+
+		// Flush the linked lists to prevent memory leaks
+		if (turns.size() > 100) turns.clear();
+		if (angles.size() > 100) angles.clear();
       }
     } while (!mpuInterrupt && fifoCount < packetSize);
     // reset interrupt flag and get INT_STATUS byte
@@ -293,29 +277,26 @@ void loop()
         // track FIFO count here in case there is > 1 packet available
         // (this lets us immediately read more without waiting for an interrupt)
         fifoCount -= packetSize;
+		mpu.dmpGetQuaternion(&q, fifoBuffer);
+		mpu.dmpGetGravity(&gravity, &q);
+		mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+		angleCurrent = ypr[0] * 180 / M_PI;
 
         #ifdef OUTPUT_READABLE_YAWPITCHROLL
             // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
             Serial.print("ypr\t");
             Serial.print(ypr[0] * 180/M_PI);
             Serial.print("\t");
             Serial.print(ypr[1] * 180/M_PI);
             Serial.print("\t");
-            Serial.println(ypr[2] * 180/M_PI);
+            Serial.print(ypr[2] * 180/M_PI);
+			Serial.print("\t");
             Serial.print(rotating);
             Serial.print("\t");
             Serial.print(angleInitial);
             Serial.print("\t");
             Serial.println(angleFinal);
-            angleCurrent = ypr[0] * 180/M_PI;
         #endif
-
-        // blink LED to indicate activity
-        blinkState = !blinkState;
-        digitalWrite(LED_PIN, blinkState);
     }
 }
 void moveForward()
@@ -351,43 +332,49 @@ void stopMovement()
     digitalWrite(IN3,LOW);   
     digitalWrite(IN4,LOW);
 }
-void turn(int direction)
+///Find the average of the angles stored
+double average() {
+	double sum = 0;
+	for (int i = 0; i < angles.size(); i++)
+		sum += angles.get(i);
+	return sum / angles.size();
+}
+void turn(byte direction)
 {
+	digitalWrite(TURN_LED, HIGH);
   //0 = forward, -1= left, 1=right
   if(silentTest)
     return;
-  if(direction == -1)
+  if(direction == LEFT)
   {
     digitalWrite(IN1,LOW);   
     digitalWrite(IN2,HIGH); 
     digitalWrite(IN3,HIGH);   
     digitalWrite(IN4,LOW);
-    analogWrite(lEnable, lWheelSpeed);
+    analogWrite(lEnable, lWheelSpeed - 50);
     analogWrite(rEnable, rWheelSpeed);       
     Serial.println("Turning left");
     //delay(5);
   }
-  if(direction == 1)
+  if(direction == RIGHT)
   {
     digitalWrite(IN1,HIGH);   
     digitalWrite(IN2,LOW); 
     digitalWrite(IN3,LOW);   
     digitalWrite(IN4,HIGH);   
     analogWrite(lEnable, lWheelSpeed);
-    analogWrite(rEnable, rWheelSpeed);
+    analogWrite(rEnable, rWheelSpeed - 50);
     Serial.println("Turning right");
   }
 }
 
-void turn(int direction, int degrees) {
+void turn(byte direction, int degrees) {
   Serial.println("Rotating using gyrocope");
   angleFinal = degrees;
   angleInitial = angleCurrent; //snapshot the current angle
   rotating = true;
-  digitalWrite(LED_PIN, LOW);
   // Set the motors
   turn(direction); 
-  digitalWrite(LED_PIN, HIGH);
 }
 int getLeftDistance()
 {
