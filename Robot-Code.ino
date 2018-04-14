@@ -15,23 +15,24 @@ byte LEFT = 0;
 byte RIGHT = 1;
 byte FORWARD = 2;
 byte INVERT = 3;
-
-int silentTest=0;
-byte IN1 = 6; // L Motor 
+// 50 = 1600us
+// 100 = 600us
+int silentTest=0;byte IN1 = 6; // L Motor 
 byte IN2 = 7;
 byte IN3 = 5; // R Motor?            
 byte IN4 = 4;
 byte backTicks=0;                          
-byte rWheelSpeedMax = 50; //prevent burnout
-byte lWheelSpeedMax = 50; // stupid motors arent matched
+byte rWheelSpeedMax = 150; //prevent burnout
+byte lWheelSpeedMax = 150; // stupid motors arent matched
 byte rWheelSpeed = rWheelSpeedMax; // This is redundant
 byte lWheelSpeed = lWheelSpeedMax;
 byte boundsThresh = 20;
 byte frontPin = 2; //front pin
-byte frontLED = 22; // on: robot is turning
+byte frontLED = 22; // on: robot is turninggal
 
-const int lEnable = 12; //pwm for left motor
-const int rEnable = 13; //pwm for right motor
+
+const int rEnable = 12; //pwm for left motor
+const int lEnable = 13; //pwm for right motor
 
 const int button = 23; // Button to enable the robot
 bool enabled = false; // whether the robot should be running full code
@@ -183,50 +184,62 @@ void loop()
 
     
     do {
+		backTicks++;
 		// other program behavior stuff here
 		// Any code not related to the gyroscope should be placed here
+		if (backTicks >= 2000)
+	{
+			backTicks = 0;
+			moveBackward();
+			delay(500);
+			if (leftDist > rightDist)
+				turn(-1, 45);
+			else turn(1, 45);
+			delay(500);
+			moveForward();
+		}
+		else if (rotating && backTicks >= 2000) { 
+			rotating = false;
+				backTicks = 0;
+				moveBackward();
+				delay(500);
+				if (leftDist > rightDist)
+					turn(-1, 45);
+				else turn(1, 45);
+				delay(500);
+				moveForward();
+		}
+      else if (rotating && abs(angleCurrent - angleInitial) >= abs(angleFinal)) { 
 
-
-      if (rotating && abs(angleCurrent - angleInitial) >= abs(angleFinal)) { 
           // if we reached our threshold angle
           moveForward();
           Serial.println("Sucessfully rotated!");
           rotating = false;
 		  digitalWrite(TURN_LED, LOW);
 		  angleStarting = angleCurrent;
+		  backTicks++;
       }
       else if (!rotating) {  // if we are supposed to be moving forward
 
-		/*
 		// Ineffecient code to prevent stopping in a wall use accelerometer instead
-        if(backTicks >= 80)
-        {
-          backTicks=0;
-          moveBackward();
-          //delay(10);
-          if(leftDistance > rightDistance)
-            turn(-1, 45);
-          else turn(1, 45);
-          //delay(10);
-          stopMovement();
-        }     
-		*/
+  
 		  /*
 		   * Turning logic
 		   */
-		if (frontDist <= 10 && rightDist >= 10 && leftDist >= 10) { // Prioritize turning left at a fork
+		  backTicks++;
+		if (frontDist <= 10 && rightDist >= 5 && leftDist >= 5) { // Prioritize turning left at a fork
 			 turn(LEFT, 45);
 			 turns.add(LEFT);
 		}
-		else if (frontDist <= 10 && leftDist <= 10) { // left corner
+		else if (frontDist <= 10 && leftDist <= 5) { // left corner
 			turn(RIGHT, 45);
 			turns.add(RIGHT);
 		}
-		else if (frontDist <= 10 && rightDist <= 10) { //right corner
+		else if (frontDist <= 10 && rightDist <= 5) { //right corner
 			turn(LEFT, 45);
 			turns.add(LEFT);
 		}
-		else if (frontDist <= 10 && rightDist <= 10 && leftDist <= 10) { // dead end
+		else if (frontDist <= 10 && rightDist <= 5 && leftDist <= 5) { // dead end
 			turn(LEFT, 180);
 			turns.add(INVERT);
 		}
@@ -316,11 +329,11 @@ void moveBackward()
 {
     if(silentTest)
       return;
-    digitalWrite(IN1,LOW);   
-    digitalWrite(IN2,HIGH);
+    digitalWrite(IN1,HIGH);   
+    digitalWrite(IN2,LOW);
     
-    digitalWrite(IN3,LOW);   
-    digitalWrite(IN4,HIGH);
+    digitalWrite(IN3,HIGH);   
+    digitalWrite(IN4,LOW);
 
     analogWrite(lEnable, lWheelSpeed);
     analogWrite(rEnable, rWheelSpeed);
@@ -351,7 +364,7 @@ void turn(byte direction)
     digitalWrite(IN2,HIGH); 
     digitalWrite(IN3,HIGH);   
     digitalWrite(IN4,LOW);
-    analogWrite(lEnable, lWheelSpeed - 50);
+    analogWrite(lEnable, lWheelSpeed);
     analogWrite(rEnable, rWheelSpeed);       
     Serial.println("Turning left");
     //delay(5);
@@ -363,7 +376,7 @@ void turn(byte direction)
     digitalWrite(IN3,LOW);   
     digitalWrite(IN4,HIGH);   
     analogWrite(lEnable, lWheelSpeed);
-    analogWrite(rEnable, rWheelSpeed - 50);
+    analogWrite(rEnable, rWheelSpeed);
     Serial.println("Turning right");
   }
 }
